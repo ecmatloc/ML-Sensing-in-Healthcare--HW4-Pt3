@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ScreenLink Transmitter</title>
+<style>
+body{font:15px Arial,sans-serif;margin:0;background:#fff0f5;color:#222}
+main{max-width:960px;margin:auto;padding:24px}
+h1{font-size:24px;font-weight:600;margin:0 0 24px}
+label{display:inline-block;margin:0 16px 14px 0}
+input,select,button{font:inherit;padding:7px;border:1px solid #aaa;border-radius:3px;background:white;color:#222}
+input[type=file]{border:0;padding:0;max-width:100%}
+button{cursor:pointer;margin:0 5px 5px 0;background:#eee}
+button:hover{background:#ddd}
+button:disabled{cursor:default;opacity:.5}
+#stage{position:relative;background:black;aspect-ratio:16/9;margin:16px 0;overflow:hidden}
+#picture{width:100%;height:100%;object-fit:cover;display:block}
+#matte{position:absolute;inset:0;background:black;opacity:0;pointer-events:none}
+#stage:fullscreen{width:100vw;height:100vh;aspect-ratio:auto}
+p{line-height:1.5}
+.note{font-size:13px;color:#555}
+#status{min-height:23px}
+</style>
+<main><h1>ScreenLink Transmitter</h1>
+<label>Custom picture <input id="file" type="file" accept="image/*"></label><br>
+<label>Message <input id="message" value="Hello" maxlength="128"></label>
+<label>Alpha difference <select id="delta"><option>0.1</option><option>0.5</option></select></label>
+<label>Seconds per bit <select id="symbol"><option>1.0</option><option>0.75</option><option selected>0.5</option><option>0.25</option></select></label>
+<button id="send">Send</button> <button id="stop">Stop</button> <button id="full">Fullscreen</button>
+<p id="status" role="status">Ready.</p>
+<div id="stage"><img id="picture" alt="Static landscape"><div id="matte"></div></div>
+<p class="note">Match the seconds per bit on the phone. Tap Listen before sending.</p>
+<button id="download">Download timing log</button></main>
+<script>
+const $=id=>document.getElementById(id), sync=[1,1,0,1,0,0,1,1,1,0,0,0,1,0,1,0];
+const bits=b=>Array.from({length:8},(_,i)=>(b>>(7-i))&1);
+function packetFor(text){const bytes=[...new TextEncoder().encode(text)];if(!bytes.length||bytes.length>128)throw Error('Use 1–128 UTF-8 bytes.');return {bytes,packet:[...sync,...bits(bytes.length),...bytes.flatMap(bits),...bits(bytes.reduce((a,b)=>a^b,0))]};}
+const svg='<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="#fce4ec"/><circle cx="1220" cy="180" r="100" fill="#fff5f8"/><path d="M0 700L430 190L900 700L1200 330L1600 730V900H0" fill="#e9a9bf"/><path d="M0 850L650 500L1100 850L1500 520L1600 700V900H0" fill="#cc7f9c"/></svg>';
+$('picture').src='data:image/svg+xml,'+encodeURIComponent(svg);
+let imageURL,raf=0,running=false,log=[],runInfo={};
+$('file').onchange=()=>{if(imageURL)URL.revokeObjectURL(imageURL);const f=$('file').files[0];if(f){imageURL=URL.createObjectURL(f);$('picture').src=imageURL;}};
+function finish(text){cancelAnimationFrame(raf);running=false;$('matte').style.opacity=0;$('status').textContent=text;for(const id of ['file','message','delta','symbol','send'])$(id).disabled=false;}
+$('send').onclick=()=>{try{
+const {bytes,packet}=packetFor($('message').value),T=Number($('symbol').value),delta=Number($('delta').value);
+let start=null,last=null;log=[];runInfo={message:$('message').value,delta,symbolSeconds:T,payloadBits:bytes.length*8,totalBits:packet.length,plannedSeconds:packet.length*T};
+running=true;for(const id of ['file','message','delta','symbol','send'])$(id).disabled=true;
+$('status').textContent=`Sending… ${(packet.length*T).toFixed(1)} seconds.`;
+function tick(now){if(!running)return;if(start===null)start=now;const elapsed=(now-start)/1000,i=Math.floor(elapsed/T);if(i>=packet.length){runInfo.actualSeconds=elapsed;finish('Transmission complete.');return;}
+const phase=(elapsed-i*T)/T,cycles=packet[i]?3:2,alpha=Math.sin(2*Math.PI*cycles*phase)>=0?delta:0;
+$('matte').style.opacity=alpha;log.push({elapsed,bit:i,value:packet[i],alpha,gapMs:last===null?0:now-last});last=now;raf=requestAnimationFrame(tick);}
+raf=requestAnimationFrame(tick);
+}catch(e){finish(e.message);}};
+$('stop').onclick=()=>finish('Cancelled; packet incomplete.');
+$('full').onclick=()=>$('stage').requestFullscreen().catch(e=>$('status').textContent=e.message);
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)finish('Cancelled because the page became hidden.');});
+$('download').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({run:runInfo,frames:log},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='screenlink-timing.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+</script></html>
